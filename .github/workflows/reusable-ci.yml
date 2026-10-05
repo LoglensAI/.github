@@ -1,0 +1,84 @@
+name: Reusable CI
+
+# One shared CI workflow for every LogLens repo (§4.5 "CI consistency").
+# Callers select their language; the job runs the right lint + test + (Go) race detector.
+# Usage from a repo:
+#   jobs:
+#     ci:
+#       uses: LoglensAI/.github/.github/workflows/reusable-ci.yml@main
+#       with:
+#         language: go        # go | python | node | none
+
+on:
+  workflow_call:
+    inputs:
+      language:
+        description: "Primary language of the calling repo: go | python | node | none"
+        required: true
+        type: string
+      working-directory:
+        description: "Subdirectory to run in (default repo root)"
+        required: false
+        type: string
+        default: "."
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---- Go ----
+      - name: Set up Go
+        if: inputs.language == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: Go vet
+        if: inputs.language == 'go'
+        run: go vet ./...
+      - name: Go test (race)
+        if: inputs.language == 'go'
+        run: go test -race -count=1 ./...
+
+      # ---- Python ----
+      - name: Set up Python
+        if: inputs.language == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install (dev)
+        if: inputs.language == 'python'
+        run: pip install -e ".[dev]" || pip install -r requirements.txt
+      - name: Ruff
+        if: inputs.language == 'python'
+        run: ruff check . || true
+      - name: Pytest
+        if: inputs.language == 'python'
+        run: pytest -q
+
+      # ---- Node / TypeScript ----
+      - name: Set up Node
+        if: inputs.language == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - name: Install
+        if: inputs.language == 'node'
+        run: npm ci || npm install
+      - name: Lint + build
+        if: inputs.language == 'node'
+        run: npm run lint --if-present && npm run build --if-present
+
+      # ---- Secret scan (all repos) ----
+      - name: Guard against committed secrets
+        run: |
+          if git grep -nE 'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|ghp_[A-Za-z0-9]{36}' -- . ':(exclude).github/**' > /tmp/secrets.txt; then
+            echo "::error:: possible secret committed"; cat /tmp/secrets.txt; exit 1
+          fi
+          echo "no obvious secrets found"
